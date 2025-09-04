@@ -218,11 +218,19 @@ function adicionarCreche(){
   const atividades = []; if(document.getElementById('atividadeAdaptacao').checked) atividades.push('Adaptação');
   if(document.getElementById('atividadeTreinamento').checked) atividades.push('Treinamento');
 
-  const c = { id: nextCrecheId++, petId: parseInt(petId), petNome: pet.nome, clienteNome: cliente.nome,
-    data, periodo, plano, entrada, saida, atividades: atividades.join(', '), total: calc.total, status:'Agendado', dataCriacao: new Date().toLocaleDateString('pt-BR') };
-  creches.push(c);
-  atualizarTabelaCreche(); limparFormularioCreche();
-  alert(`Creche agendada! Total: R$ ${c.total.toFixed(2).replace('.',',')}`); saveState();
+  const c = {
+  id: nextCrecheId++,
+  petId: parseInt(petId),
+  petNome: pet.nome,
+  clienteNome: cliente.nome,
+  data, periodo, plano, entrada, saida,
+  dias: calc.multiplicador,          // <<--- novo
+  atividades: atividades.join(', '),
+  total: calc.total,
+  status: 'Agendado',
+  dataCriacao: new Date().toLocaleDateString('pt-BR')
+};
+
 }
 function limparFormularioCreche(){
   ['crechePet','crecheData','crechePeriodo','crechePlano','crecheEntrada','crecheSaida'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value = (id==='crechePlano'?'avulso':''); });
@@ -385,7 +393,16 @@ function gerarOrcamentoCreche(){
 
 function gerarOrcamentoCrecheExistente(id){
   const c = creches.find(x=>x.id===id); if(!c){ alert('Registro não encontrado.'); return; }
-  const pet = pets.find(p=>p.id===c.petId); const cliente = pet?clientes.find(z=>z.id===pet.clienteId):null;
+  const pet = pets.find(p=>p.id===c.petId);
+  const cliente = pet ? clientes.find(z=>z.id===pet.clienteId) : null;
+
+  // usa o valor salvo; se não existir (registros antigos), calcula pelo plano
+  const dias = (typeof c.dias === 'number' && c.dias > 0)
+    ? c.dias
+    : (c.plano==='semanal' ? precos.planosCreche.semanalDias
+       : c.plano==='mensal' ? precos.planosCreche.mensalDias
+       : 1);
+
   const hoje = new Date().toLocaleString('pt-BR');
   const corpo = `
     <h1>Orçamento – Creche (Clube Pet)</h1>
@@ -404,13 +421,15 @@ function gerarOrcamentoCrecheExistente(id){
       <table>
         <tr><th>Data</th><td>${new Date(c.data).toLocaleDateString('pt-BR')}</td></tr>
         <tr><th>Período</th><td>${c.periodo}</td></tr>
+        <tr><th>Dias (plano)</th><td>${dias}</td></tr>
         <tr><th>Atividades</th><td>${c.atividades || '—'}</td></tr>
       </table>
-      <div class="total">Total estimado: R$ ${c.total.toFixed(2).replace('.',',')}</div>
+      <div class="total">Total estimado: R$ ${Number(c.total).toFixed(2).replace('.',',')}</div>
     </div>
     <p class="small"><strong>Pré-requisitos:</strong> cartão de vacinas válido, coleira/antipulgas, caminha e comida.</p>`;
   abrirPdfHtml('Orçamento Creche', corpo);
 }
+
 
 // ===== Relatórios & Excel =====
 function atualizarResumo(){
@@ -721,8 +740,7 @@ async function exportarPlanilhaXLSX(){
 }
 // Redireciona o botão "Exportar para Excel (CSV)" para o XLSX estilizado
 window.exportarExcel = exportarPlanilhaXLSX;
-// Faz o botão "Relatório Completo" gerar a planilha XLSX personalizada
-window.exportarRelatorio = exportarPlanilhaXLSX;
+
 
 // ===== Inicialização =====
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -736,4 +754,3 @@ document.addEventListener('DOMContentLoaded', ()=>{
   ['crechePet','crecheData','crechePeriodo','crechePlano','atividadeAdaptacao','atividadeTreinamento']
     .forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('change', calcularPrecoCreche); });
 });
-
