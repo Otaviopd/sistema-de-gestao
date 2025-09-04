@@ -721,7 +721,8 @@ async function exportarPlanilhaXLSX(){
 }
 // Redireciona o botão "Exportar para Excel (CSV)" para o XLSX estilizado
 window.exportarExcel = exportarPlanilhaXLSX;
-
+// Faz o botão "Relatório Completo" gerar a planilha XLSX personalizada
+window.exportarRelatorio = exportarPlanilhaXLSX;
 
 // ===== Inicialização =====
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -735,3 +736,4 @@ document.addEventListener('DOMContentLoaded', ()=>{
   ['crechePet','crecheData','crechePeriodo','crechePlano','atividadeAdaptacao','atividadeTreinamento']
     .forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('change', calcularPrecoCreche); });
 });
+
