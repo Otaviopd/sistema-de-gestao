@@ -9,7 +9,8 @@ let precos = {
   hospedagem: { pequeno:80, medio:100, grande:120, gigante:150 },
   creche: { meio:50, integral:80 },
   planosCreche: { semanalDias:5, mensalDias:22 },
-  extras: { banho:30, consulta:80, transporte:20, adaptacao:15, treinamento:25 }
+  extras: { banho:30, consulta:80, transporte:20, adaptacao:15, treinamento:25 },
+  descontosCreche: { semanalPercent: 0, mensalPercent: 0 }
 };
 
 // ===== Persistência local =====
@@ -24,6 +25,11 @@ function loadState(){
     clientes=s.clientes||[]; pets=s.pets||[]; hospedagens=s.hospedagens||[]; creches=s.creches||[];
     precos=s.precos||precos; nextClienteId=s.nextClienteId||1; nextPetId=s.nextPetId||1; nextHospedagemId=s.nextHospedagemId||1; nextCrecheId=s.nextCrecheId||1;
   }catch(e){ console.error(e); }
+  // garante o campo novo mesmo para dados antigos no storage
+if (!precos.descontosCreche) {
+  precos.descontosCreche = { semanalPercent: 0, mensalPercent: 0 };
+}
+
 }
 
 // ===== Abas =====
@@ -183,21 +189,57 @@ function excluirHospedagem(id){ if(!confirm('Excluir esta hospedagem?')) return;
 
 // ===== Creche =====
 function calcularPrecoCreche(){
-  const petId = document.getElementById('crechePet').value;
+  const petId   = document.getElementById('crechePet').value;
   const periodo = document.getElementById('crechePeriodo').value;
-  const plano = document.getElementById('crechePlano').value;
-  if(!petId || !periodo){ document.getElementById('precoCreche').textContent='💰 Valor Total: R$ 0,00'; return; }
+  const plano   = document.getElementById('crechePlano').value;
 
-  let base = (periodo==='Meio período') ? precos.creche.meio : precos.creche.integral;
-  let multiplicador = 1; if(plano==='semanal') multiplicador=precos.planosCreche.semanalDias; if(plano==='mensal') multiplicador=precos.planosCreche.mensalDias;
+  if(!petId || !periodo){
+    document.getElementById('precoCreche').textContent = '💰 Valor Total: R$ 0,00';
+    return;
+  }
 
-  let total = base * multiplicador;
-  if(document.getElementById('atividadeAdaptacao').checked) total += precos.extras.adaptacao * multiplicador;
-  if(document.getElementById('atividadeTreinamento').checked) total += precos.extras.treinamento * multiplicador;
+  // base por período
+  const base = (periodo === 'Meio período') ? precos.creche.meio : precos.creche.integral;
 
-  document.getElementById('precoCreche').textContent = `💰 Valor Total: R$ ${total.toFixed(2).replace('.',',')}${multiplicador>1?` (${multiplicador} dia(s))`:''}`;
-  return { total, multiplicador, base, periodo, plano };
+  // multiplicador por plano
+  let multiplicador = 1;
+  if(plano === 'semanal') multiplicador = precos.planosCreche.semanalDias;
+  if(plano === 'mensal')  multiplicador = precos.planosCreche.mensalDias;
+
+  // subtotal (base x dias) + extras
+  let subtotal = base * multiplicador;
+  if(document.getElementById('atividadeAdaptacao').checked){
+    subtotal += precos.extras.adaptacao * multiplicador;
+  }
+  if(document.getElementById('atividadeTreinamento').checked){
+    subtotal += precos.extras.treinamento * multiplicador;
+  }
+
+  // DESCONTO por plano (vem de Configurações)
+  const d = precos.descontosCreche || { semanalPercent: 0, mensalPercent: 0 };
+  let descontoPercent = 0;
+  if(plano === 'semanal') descontoPercent = Number(d.semanalPercent) || 0;
+  if(plano === 'mensal')  descontoPercent = Number(d.mensalPercent)  || 0;
+
+  const descontoValor = subtotal * (descontoPercent / 100);
+  const total = Math.max(0, subtotal - descontoValor);
+
+// texto no visor (sem parênteses duplicados)
+const visor = document.getElementById('precoCreche');
+let sufixo = '';
+if (multiplicador > 1 && descontoPercent) {
+  sufixo = ` (${multiplicador} dia(s) • -${descontoPercent}%)`;
+} else if (multiplicador > 1) {
+  sufixo = ` (${multiplicador} dia(s))`;
+} else if (descontoPercent) {
+  sufixo = ` (-${descontoPercent}%)`;
 }
+visor.textContent = `💰 Valor Total: R$ ${total.toFixed(2).replace('.',',')}${sufixo}`;
+
+
+  return { total, multiplicador, base, periodo, plano, descontoPercent, descontoValor, subtotal };
+}
+
 function validarPrereqCreche(){ return ['prereqVacinaC','prereqPulgaC','prereqCaminhaC','prereqComidaC'].every(id=>document.getElementById(id).checked); }
 function adicionarCreche(){
   const petId = document.getElementById('crechePet').value;
@@ -230,6 +272,13 @@ function adicionarCreche(){
   status: 'Agendado',
   dataCriacao: new Date().toLocaleDateString('pt-BR')
 };
+
+creches.push(c);
+atualizarTabelaCreche();
+limparFormularioCreche();
+alert(`Creche agendada! Total: R$ ${c.total.toFixed(2).replace('.',',')}`);
+saveState();
+
 
 }
 function limparFormularioCreche(){
@@ -365,30 +414,34 @@ function gerarOrcamentoCreche(){
     document.getElementById('atividadeTreinamento').checked ? 'Treinamento' : null
   ].filter(Boolean).join(', ') || '—';
   const hoje = new Date().toLocaleString('pt-BR');
-  const corpo = `
-    <h1>Orçamento – Creche (Clube Pet)</h1>
-    <div class="muted">Gerado em ${hoje}</div>
-    <div class="box">
-      <div class="row">
-        <div class="col"><strong>Cliente:</strong> ${cliente?cliente.nome:'—'}</div>
-        <div class="col"><strong>Telefone:</strong> ${cliente?cliente.telefone:'—'}</div>
-      </div>
-      <div class="row">
-        <div class="col"><strong>Pet:</strong> ${pet?pet.nome:'—'}</div>
-        <div class="col"><strong>Plano:</strong> ${calc.plano}</div>
-      </div>
+ const corpo = `
+  <h1>Orçamento – Creche (Clube Pet)</h1>
+  <div class="muted">Gerado em ${hoje}</div>
+  <div class="box">
+    <div class="row">
+      <div class="col"><strong>Cliente:</strong> ${cliente?cliente.nome:'—'}</div>
+      <div class="col"><strong>Telefone:</strong> ${cliente?cliente.telefone:'—'}</div>
     </div>
-    <div class="box">
-      <table>
-        <tr><th>Data inicial</th><td>${new Date(data).toLocaleDateString('pt-BR')}</td></tr>
-        <tr><th>Período</th><td>${periodo}</td></tr>
-        <tr><th>Dias (estimado)</th><td>${calc.multiplicador}</td></tr>
-        <tr><th>Atividades</th><td>${atv}</td></tr>
-      </table>
-      <div class="total">Total estimado: R$ ${calc.total.toFixed(2).replace('.',',')}</div>
+    <div class="row">
+      <div class="col"><strong>Pet:</strong> ${pet?pet.nome:'—'}</div>
+      <div class="col"><strong>Plano:</strong> ${calc.plano}</div>
     </div>
-    <p class="small"><strong>Pré-requisitos:</strong> cartão de vacinas válido, coleira/antipulgas, caminha e comida.</p>`;
-  abrirPdfHtml('Orçamento Creche', corpo);
+  </div>
+  <div class="box">
+    <table>
+      <tr><th>Data inicial</th><td>${new Date(data).toLocaleDateString('pt-BR')}</td></tr>
+      <tr><th>Período</th><td>${periodo}</td></tr>
+      <tr><th>Dias</th><td>${calc.multiplicador}</td></tr>
+      ${calc.descontoPercent ? `<tr><th>Desconto</th><td>${calc.descontoPercent}% (-R$ ${calc.descontoValor.toFixed(2).replace('.',',')})</td></tr>` : ''}
+      <tr><th>Subtotal</th><td>R$ ${calc.subtotal.toFixed(2).replace('.',',')}</td></tr>
+      <tr><th>Atividades</th><td>${atv}</td></tr>
+    </table>
+    <div class="total">Total estimado: R$ ${calc.total.toFixed(2).replace('.',',')}</div>
+  </div>
+  <p class="small"><strong>Pré-requisitos:</strong> cartão de vacinas válido, coleira/antipulgas, caminha e comida.</p>
+`;
+abrirPdfHtml('Orçamento Creche', corpo);
+
 }
 
 function gerarOrcamentoCrecheExistente(id){
@@ -740,11 +793,90 @@ async function exportarPlanilhaXLSX(){
 }
 // Redireciona o botão "Exportar para Excel (CSV)" para o XLSX estilizado
 window.exportarExcel = exportarPlanilhaXLSX;
+window.exportarRelatorio = exportarPlanilhaXLSX;
+
+
+// ===== Configurações (salvar e preencher) =====
+function salvarConfiguracoes(){
+  const n = id => parseFloat(document.getElementById(id)?.value) || 0;
+  const i = id => parseInt(document.getElementById(id)?.value) || 0;
+
+  // Hospedagem
+  precos.hospedagem = {
+    pequeno: n('precoHospedagemPequeno'),
+    medio:   n('precoHospedagemMedio'),
+    grande:  n('precoHospedagemGrande'),
+    gigante: n('precoHospedagemGigante'),
+  };
+
+  // Creche (diárias)
+  precos.creche = {
+    meio:     n('precoCrecheMeio'),
+    integral: n('precoCrecheIntegral'),
+  };
+
+  // Planos (dias)
+  precos.planosCreche = {
+    semanalDias: i('crecheDiasSemanal'),
+    mensalDias:  i('crecheDiasMensal'),
+  };
+
+  // Extras
+  precos.extras = {
+    banho:       n('extraBanho'),
+    consulta:    n('extraConsulta'),
+    transporte:  n('extraTransporte'),
+    adaptacao:   n('extraAdaptacao'),
+    treinamento: n('extraTreinamento'),
+  };
+
+  // Descontos (NOVO)
+  precos.descontosCreche = {
+    semanalPercent: n('descontoSemanal'),
+    mensalPercent:  n('descontoMensal'),
+  };
+
+  saveState();
+  alert('Configurações salvas!');
+  calcularPrecoHospedagem();
+  calcularPrecoCreche();
+}
+
+function preencherConfiguracoes(){
+  const set = (id,val)=>{ const el=document.getElementById(id); if(el!=null && val!=null) el.value = String(val); };
+
+  // Hospedagem
+  set('precoHospedagemPequeno', precos.hospedagem.pequeno);
+  set('precoHospedagemMedio',   precos.hospedagem.medio);
+  set('precoHospedagemGrande',  precos.hospedagem.grande);
+  set('precoHospedagemGigante', precos.hospedagem.gigante);
+
+  // Creche
+  set('precoCrecheMeio',     precos.creche.meio);
+  set('precoCrecheIntegral', precos.creche.integral);
+
+  // Planos
+  set('crecheDiasSemanal', precos.planosCreche.semanalDias);
+  set('crecheDiasMensal',  precos.planosCreche.mensalDias);
+
+  // Extras
+  set('extraBanho',       precos.extras.banho);
+  set('extraConsulta',    precos.extras.consulta);
+  set('extraTransporte',  precos.extras.transporte);
+  set('extraAdaptacao',   precos.extras.adaptacao);
+  set('extraTreinamento', precos.extras.treinamento);
+
+  // Descontos (NOVO)
+  const d = precos.descontosCreche || {semanalPercent:0, mensalPercent:0};
+  set('descontoSemanal', d.semanalPercent);
+  set('descontoMensal',  d.mensalPercent);
+}
 
 
 // ===== Inicialização =====
 document.addEventListener('DOMContentLoaded', ()=>{
   loadState();
+  preencherConfiguracoes();
   atualizarTabelaClientes(); atualizarTabelaPets(); atualizarTabelaHospedagem(); atualizarTabelaCreche(); atualizarResumo();
 
   // Recalcular preços automaticamente
