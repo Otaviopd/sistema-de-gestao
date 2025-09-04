@@ -412,7 +412,7 @@ function gerarOrcamentoCrecheExistente(id){
   abrirPdfHtml('Orçamento Creche', corpo);
 }
 
-// ===== Relatórios & Excel (tela) =====
+// ===== Relatórios & Excel =====
 function atualizarResumo(){
   document.getElementById('totalClientes').textContent = clientes.length;
   document.getElementById('totalPets').textContent = pets.length;
@@ -444,7 +444,7 @@ function gerarRelatorio(){
   document.getElementById('relatorioResultado').style.display='block';
 }
 
-// CSV simples (BOM + separador ;)
+// CSV para Excel (BOM + ; separador)
 function exportarExcel(){
   const dados = { clientes, pets, hospedagens, creches, precos };
   const csv = gerarCSVExcel(dados);
@@ -497,259 +497,231 @@ ${creches.map(c=>`- ${c.petNome} (${c.clienteNome}): ${c.data} - ${c.periodo} ($
 }
 
 /* =========================
-   >>> XLSX PERSONALIZADO (SEM IMAGEM) — DASHBOARD FC <<<
-   - Cores, cabeçalhos, bordas e larguras
-   - Abas: Clientes, Pets, Hospedagens, Creche e FC (Fluxo de Caixa)
-   - Telefones/CPF como texto; datas BR; moeda R$
+   >>> NOVO: XLSX PERSONALIZADO + IMAGEM FIXA <<<
+   - Gera 4 abas (Clientes, Pets, Hospedagens, Creche) + Resumo
+   - Cabeçalho estilizado, auto-filtro, congelar linha 1
+   - Datas e valores com formato
+   - Linha de soma para valores
+   - Imagem fixa ao final da aba "Resumo" (se enviada)
 ========================= */
 
-// Paleta
-const XL = {
-  banner: 'FF5B3A1A',         // marrom
-  bannerText: 'FFFFFFFF',
-  header: 'FF1F2937',         // cinza escuro
-  headerText: 'FFFFFFFF',
-  line: 'FFCBD5E1',
-  zebra: 'FFF8FAFC',
-  green: 'FF16A34A',
-  red: 'FFDC2626',
-  blue: 'FF2563EB',
-  section: 'FFE5E7EB',
-  white: 'FFFFFFFF',
-  grayText: 'FF334155'
-};
-
-function _setHeader(ws){
-  const r = ws.getRow(1);
-  r.font = { bold:true, color:{argb:XL.headerText} };
-  r.alignment = { vertical:'middle', horizontal:'center' };
-  r.height = 22;
-  r.fill = { type:'pattern', pattern:'solid', fgColor:{argb:XL.header} };
-  r.eachCell(c=>{
-    c.border = { top:{style:'thin',color:{argb:XL.line}}, left:{style:'thin',color:{argb:XL.line}},
-                 bottom:{style:'thin',color:{argb:XL.line}}, right:{style:'thin',color:{argb:XL.line}} };
+function _estilizarCabecalho(ws){
+  const header = ws.getRow(1);
+  header.font = { bold: true, color:{argb:'FFFFFFFF'} };
+  header.alignment = { vertical:'middle', horizontal:'center' };
+  header.height = 22;
+  header.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF1F2937'} };
+  header.eachCell(cell=>{
+    cell.border = {
+      top:{style:'thin', color:{argb:'FF374151'}},
+      left:{style:'thin', color:{argb:'FF374151'}},
+      bottom:{style:'thin', color:{argb:'FF374151'}},
+      right:{style:'thin', color:{argb:'FF374151'}},
+    };
   });
 }
-function _freezeFilter(ws){ ws.views=[{state:'frozen',ySplit:1}]; ws.autoFilter={from:{row:1,column:1},to:{row:1,column:ws.columnCount}}; }
-function _zebra(ws){ for(let r=2; r<=ws.lastRow.number; r++){ if(r%2===0){ ws.getRow(r).eachCell(c=>{ c.fill={type:'pattern',pattern:'solid',fgColor:{argb:XL.zebra}}; }); } } }
-function _textCol(ws, key){ const col=ws.getColumn(key); for(let r=2;r<=ws.lastRow.number;r++){ ws.getRow(r).getCell(col.number).numFmt='@'; } }
-function _parseBR(s){ if(!s) return null; if(/^\d{2}\/\d{2}\/\d{4}$/.test(s)){ const [d,m,y]=s.split('/').map(n=>+n); return new Date(y,m-1,d); } const d=new Date(s); return isNaN(d)?null:d; }
-function _receitaMeses(){
-  const arr=new Array(12).fill(0);
-  hospedagens.forEach(h=>{ const d=_parseBR(h.dataCriacao); if(d) arr[d.getMonth()]+=Number(h.total)||0; });
-  creches.forEach(c=>{ const d=_parseBR(c.dataCriacao); if(d) arr[d.getMonth()]+=Number(c.total)||0; });
-  return arr;
+
+function _congelarEFiltrar(ws, lastCol){
+  ws.views = [{ state:'frozen', ySplit:1 }];
+  ws.autoFilter = { from:{row:1, column:1}, to:{row:1, column:lastCol} };
+}
+
+function _somaColuna(ws, colKeyOrLetter, labelCol='A', label='TOTAL'){
+  const last = ws.lastRow.number;
+  const sumRow = ws.addRow({});
+  sumRow.getCell(labelCol).value = label;
+  sumRow.getCell(labelCol).font = { bold:true };
+  const colIdx = typeof colKeyOrLetter === 'string' && isNaN(+colKeyOrLetter)
+    ? ws.getColumn(colKeyOrLetter).number
+    : colKeyOrLetter;
+  const colLetter = ws.getColumn(colIdx).letter;
+  sumRow.getCell(colIdx).value = { formula: `SUM(${colLetter}2:${colLetter}${last})` };
+  sumRow.getCell(colIdx).numFmt = '"R$" #,##0.00';
+}
+
+function _addValidacoesPets(ws){
+  // Validações simples (linhas 2..500)
+  for(let r=2;r<=500;r++){
+    ws.getCell(`F${r}`).dataValidation = { type:'list', allowBlank:true, formulae:['"Pequeno,Médio,Grande,Gigante"'] };
+    ws.getCell(`H${r}`).dataValidation = { type:'list', allowBlank:true, formulae:['"Dócil,Brincalhão,Tímido,Agitado,Agressivo,Calmo"'] };
+  }
+}
+
+async function _addImagemFixaResumo(workbook, wsResumo, file){
+  if(!file) return;
+  const buf = await file.arrayBuffer();
+  const ext = (file.type||'').toLowerCase().includes('png') ? 'png' : 'jpeg';
+  const imgId = workbook.addImage({ buffer: buf, extension: ext });
+
+  // coloca 2 linhas abaixo do último conteúdo
+  const startRow = wsResumo.lastRow ? wsResumo.lastRow.number + 2 : 3;
+
+  wsResumo.addImage(imgId, {
+    tl: { col: 0, row: startRow - 1 },
+    ext: { width: 700, height: 220 },
+    // imagem FIXA: não move e não redimensiona com células
+    editAs: 'absolute'
+  });
 }
 
 async function exportarPlanilhaXLSX(){
   try{
-    if(typeof ExcelJS==='undefined'){ alert('ExcelJS não carregado.'); return; }
-    const wb=new ExcelJS.Workbook();
-    wb.created=new Date(); wb.properties={title:'Clube Pet - Planilha',creator:'Clube Pet'};
+    if(typeof ExcelJS === 'undefined'){ alert('ExcelJS não carregado. Confira sua conexão.'); return; }
+    const wb = new ExcelJS.Workbook();
+    wb.created = new Date();
+    wb.properties = { title:'Clube Pet - Dados', subject:'Export', creator:'Clube Pet' };
+   
 
-    // ==== CLIENTES ====
-    const shCli=wb.addWorksheet('Clientes');
-    shCli.columns=[
-      {header:'ID',key:'id',width:8},{header:'Nome',key:'nome',width:28},{header:'Email',key:'email',width:28},
-      {header:'Telefone',key:'telefone',width:18},{header:'CPF',key:'cpf',width:16},{header:'Endereço',key:'endereco',width:30},
-      {header:'Emergência',key:'emergencia',width:24},{header:'Cadastro',key:'dataCadastro',width:14}
+
+    // === Clientes ===
+    const shCli = wb.addWorksheet('Clientes');
+    shCli.columns = [
+      { header:'ID', key:'id', width:8 },
+      { header:'Nome', key:'nome', width:28 },
+      { header:'Email', key:'email', width:28 },
+      { header:'Telefone', key:'telefone', width:18 },
+      { header:'CPF', key:'cpf', width:16 },
+      { header:'Endereço', key:'endereco', width:30 },
+      { header:'Emergência', key:'emergencia', width:24 },
+      { header:'Cadastro', key:'dataCadastro', width:14 }
     ];
-    clientes.forEach(c=>shCli.addRow({...c,telefone:String(c.telefone||''),cpf:String(c.cpf||'')}));
-    _setHeader(shCli); _freezeFilter(shCli); _textCol(shCli,'telefone'); _textCol(shCli,'cpf'); _zebra(shCli);
+    clientes.forEach(c=> shCli.addRow(c));
+    _estilizarCabecalho(shCli);
+    _congelarEFiltrar(shCli, shCli.columnCount);
 
-    // ==== PETS ====
-    const shPet=wb.addWorksheet('Pets');
-    shPet.columns=[
-      {header:'ID',key:'id',width:8},{header:'Cliente',key:'clienteNome',width:28},{header:'Nome',key:'nome',width:20},
-      {header:'Espécie',key:'especie',width:12},{header:'Raça',key:'raca',width:18},{header:'Tamanho',key:'tamanho',width:12},
-      {header:'Peso (kg)',key:'peso',width:10},{header:'Temperamento',key:'temperamento',width:16},
-      {header:'Castrado',key:'castrado',width:10},{header:'Cartão Vacinas',key:'cartaoVacinaNumero',width:18},
-      {header:'Medicamentos',key:'medicamentos',width:30},{header:'Observações',key:'observacoes',width:30},
-      {header:'Cadastro',key:'dataCadastro',width:14}
+    // === Pets ===
+    const shPet = wb.addWorksheet('Pets');
+    shPet.columns = [
+      { header:'ID', key:'id', width:8 },
+      { header:'Cliente', key:'clienteNome', width:28 },
+      { header:'Nome', key:'nome', width:20 },
+      { header:'Espécie', key:'especie', width:12 },
+      { header:'Raça', key:'raca', width:18 },
+      { header:'Tamanho', key:'tamanho', width:12 },
+      { header:'Peso (kg)', key:'peso', width:10 },
+      { header:'Temperamento', key:'temperamento', width:14 },
+      { header:'Castrado', key:'castrado', width:10 },
+      { header:'CartãoVac', key:'cartaoVacinaNumero', width:16 },
+      { header:'Medicamentos', key:'medicamentos', width:30 },
+      { header:'Observações', key:'observacoes', width:30 },
+      { header:'Cadastro', key:'dataCadastro', width:14 },
     ];
-    pets.forEach(p=>shPet.addRow({...p,peso:(p.peso==null||p.peso==='')?null:Number(p.peso)}));
-    _setHeader(shPet); _freezeFilter(shPet); _zebra(shPet);
+    pets.forEach(p=>{
+      const row = {
+        ...p,
+        peso: (p.peso==null||p.peso==='') ? null : Number(p.peso)
+      };
+      shPet.addRow(row);
+    });
+    _estilizarCabecalho(shPet);
+    _congelarEFiltrar(shPet, shPet.columnCount);
+    _addValidacoesPets(shPet);
 
-    // ==== HOSPEDAGENS ====
-    const shHos=wb.addWorksheet('Hospedagens');
-    shHos.columns=[
-      {header:'ID',key:'id',width:8},{header:'Pet',key:'petNome',width:18},{header:'Cliente',key:'clienteNome',width:24},
-      {header:'Check-in',key:'checkin',width:14},{header:'Check-out',key:'checkout',width:14},{header:'Dias',key:'dias',width:8},
-      {header:'Serviços',key:'servicos',width:28},{header:'Total (R$)',key:'total',width:14},{header:'Status',key:'status',width:12},
-      {header:'Criado em',key:'dataCriacao',width:14}
+    // === Hospedagens ===
+    const shHos = wb.addWorksheet('Hospedagens');
+    shHos.columns = [
+      { header:'ID', key:'id', width:8 },
+      { header:'Pet', key:'petNome', width:18 },
+      { header:'Cliente', key:'clienteNome', width:24 },
+      { header:'Check-in', key:'checkin', width:14 },
+      { header:'Check-out', key:'checkout', width:14 },
+      { header:'Dias', key:'dias', width:8 },
+      { header:'Serviços', key:'servicos', width:28 },
+      { header:'Total (R$)', key:'total', width:14 },
+      { header:'Status', key:'status', width:12 },
+      { header:'Criado em', key:'dataCriacao', width:14 },
     ];
     hospedagens.forEach(h=>{
-      const r=shHos.addRow(h);
-      r.getCell('checkin').value=h.checkin?new Date(h.checkin):null;
-      r.getCell('checkout').value=h.checkout?new Date(h.checkout):null;
-      r.getCell('checkin').numFmt='dd/mm/yyyy'; r.getCell('checkout').numFmt='dd/mm/yyyy';
-      r.getCell('total').numFmt='"R$" #,##0.00';
+      const r = shHos.addRow(h);
+      // formatar datas e valores
+      r.getCell('checkin').value = h.checkin ? new Date(h.checkin) : null;
+      r.getCell('checkout').value = h.checkout ? new Date(h.checkout) : null;
+      r.getCell('checkin').numFmt = 'dd/mm/yyyy';
+      r.getCell('checkout').numFmt = 'dd/mm/yyyy';
+      r.getCell('total').numFmt = '"R$" #,##0.00';
     });
-    _setHeader(shHos); _freezeFilter(shHos); _zebra(shHos);
+    _estilizarCabecalho(shHos);
+    _congelarEFiltrar(shHos, shHos.columnCount);
+    if(shHos.lastRow && shHos.lastRow.number >= 2) _somaColuna(shHos, 'H', 'G', 'TOTAL');
 
-    // ==== CRECHE ====
-    const shCre=wb.addWorksheet('Creche');
-    shCre.columns=[
-      {header:'ID',key:'id',width:8},{header:'Pet',key:'petNome',width:18},{header:'Cliente',key:'clienteNome',width:24},
-      {header:'Data',key:'data',width:14},{header:'Período',key:'periodo',width:16},{header:'Plano',key:'plano',width:12},
-      {header:'Entrada',key:'entrada',width:12},{header:'Saída',key:'saida',width:12},{header:'Atividades',key:'atividades',width:28},
-      {header:'Total (R$)',key:'total',width:14},{header:'Status',key:'status',width:12},{header:'Criado em',key:'dataCriacao',width:14}
+    // === Creche ===
+    const shCre = wb.addWorksheet('Creche');
+    shCre.columns = [
+      { header:'ID', key:'id', width:8 },
+      { header:'Pet', key:'petNome', width:18 },
+      { header:'Cliente', key:'clienteNome', width:24 },
+      { header:'Data', key:'data', width:14 },
+      { header:'Período', key:'periodo', width:16 },
+      { header:'Plano', key:'plano', width:12 },
+      { header:'Entrada', key:'entrada', width:12 },
+      { header:'Saída', key:'saida', width:12 },
+      { header:'Atividades', key:'atividades', width:28 },
+      { header:'Total (R$)', key:'total', width:14 },
+      { header:'Status', key:'status', width:12 },
+      { header:'Criado em', key:'dataCriacao', width:14 },
     ];
     creches.forEach(c=>{
-      const r=shCre.addRow(c);
-      r.getCell('data').value=c.data?new Date(c.data):null;
-      r.getCell('data').numFmt='dd/mm/yyyy';
-      r.getCell('total').numFmt='"R$" #,##0.00';
+      const r = shCre.addRow(c);
+      r.getCell('data').value = c.data ? new Date(c.data) : null;
+      r.getCell('data').numFmt = 'dd/mm/yyyy';
+      r.getCell('total').numFmt = '"R$" #,##0.00';
     });
-    _setHeader(shCre); _freezeFilter(shCre); _zebra(shCre);
+    _estilizarCabecalho(shCre);
+    _congelarEFiltrar(shCre, shCre.columnCount);
+    if(shCre.lastRow && shCre.lastRow.number >= 2) _somaColuna(shCre, 'J', 'I', 'TOTAL');
 
-    // ==== FC (Fluxo de Caixa) ====
-    const shFC=wb.addWorksheet('FC');
-    // Banner
-    shFC.mergeCells('A1:N1');
-    const b=shFC.getCell('A1');
-    b.value='🐾 Clube Pet — Fluxo de Caixa';
-    b.font={bold:true,size:14,color:{argb:XL.bannerText}};
-    b.alignment={vertical:'middle',horizontal:'left'};
-    b.fill={type:'pattern',pattern:'solid',fgColor:{argb:XL.banner}};
-    shFC.getRow(1).height=28;
-
-    // Cabeçalho meses
-    const meses=['Finanças','Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro','Total'];
-    shFC.addRow(meses);
-    const r2=shFC.getRow(2);
-    r2.font={bold:true,color:{argb:XL.white}};
-    r2.alignment={vertical:'middle',horizontal:'center'};
-    r2.height=22;
-    r2.eachCell(c=>{
-      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:XL.header}};
-      c.border={top:{style:'thin',color:{argb:XL.line}},left:{style:'thin',color:{argb:XL.line}},bottom:{style:'thin',color:{argb:XL.line}},right:{style:'thin',color:{argb:XL.line}}};
+    // === Resumo ===
+    const shRes = wb.addWorksheet('Resumo');
+    shRes.columns = [
+      { header:'Métrica', key:'metrica', width:30 },
+      { header:'Valor', key:'valor', width:28 },
+    ];
+    const totalH = hospedagens.reduce((s,h)=>s + (Number(h.total)||0), 0);
+    const totalC = creches.reduce((s,c)=>s + (Number(c.total)||0), 0);
+    const resumoRows = [
+      { metrica:'Total Clientes', valor: clientes.length },
+      { metrica:'Total Pets', valor: pets.length },
+      { metrica:'Hospedagens Ativas', valor: hospedagens.filter(h=>h.status==='Ativo').length },
+      { metrica:'Receita Hospedagens (R$)', valor: totalH },
+      { metrica:'Receita Creche (R$)', valor: totalC },
+      { metrica:'Receita TOTAL (R$)', valor: totalH + totalC },
+    ];
+    resumoRows.forEach((r,i)=>{
+      const row = shRes.addRow(r);
+      if(r.metrica.includes('R$')){
+        row.getCell('valor').numFmt = '"R$" #,##0.00';
+      }
+      if(i === resumoRows.length-1){
+        row.font = { bold:true };
+      }
     });
-    const widths=[18,13,13,13,13,13,13,13,13,13,13,13,13,14]; widths.forEach((w,i)=>shFC.getColumn(i+1).width=w);
+    _estilizarCabecalho(shRes);
+    _congelarEFiltrar(shRes, shRes.columnCount);
 
-    let rowNo=2;
-    function section(title){
-      rowNo++;
-      const r=shFC.addRow([title]); shFC.mergeCells(`A${rowNo}:N${rowNo}`);
-      r.font={bold:true,color:{argb:XL.grayText}};
-      r.fill={type:'pattern',pattern:'solid',fgColor:{argb:XL.section}};
-      r.alignment={horizontal:'left',vertical:'middle'};
-      return r;
-    }
-    function moneyRow(label, valuesArray){
-      rowNo++;
-      const row=shFC.addRow([label, ...valuesArray, null]);
-      for(let c=2;c<=14;c++){
-        const cell=row.getCell(c);
-        cell.numFmt='"R$" #,##0.00';
-        cell.border={top:{style:'thin',color:{argb:XL.line}},left:{style:'thin',color:{argb:XL.line}},bottom:{style:'thin',color:{argb:XL.line}},right:{style:'thin',color:{argb:XL.line}}};
-      }
-      row.getCell(14).value={formula:`SUM(B${row.number}:M${row.number})`};
-      return row;
-    }
-    function percentRow(label){
-      rowNo++;
-      const row=shFC.addRow([label]);
-      for(let c=2;c<=14;c++){
-        const cell=row.getCell(c); cell.value=0; cell.numFmt='0%'; cell.alignment={horizontal:'center'};
-        cell.border={top:{style:'thin',color:{argb:XL.line}},left:{style:'thin',color:{argb:XL.line}},bottom:{style:'thin',color:{argb:XL.line}},right:{style:'thin',color:{argb:XL.line}}};
-      }
-      return row;
-    }
+    // === Imagem fixa ao final do "Resumo" (se enviada) ===
+    const imgFile = document.getElementById('xlsxImagem')?.files?.[0] || null;
+    await _addImagemFixaResumo(wb, shRes, imgFile);
 
-    // Planejamento
-    section('Planejamento');
-    const rProLab = moneyRow('Pro Labore', new Array(12).fill(0));
-    const rPrevRec = moneyRow('Previsão de Receitas', new Array(12).fill(0));
-    const rPrevGas = moneyRow('Previsão de Gastos', new Array(12).fill(0));
-    // Resultado Previsto (fórmula)
-    rowNo++;
-    const rResPrev = shFC.addRow(['Resultado Previsto', ...new Array(12).fill(0), null]);
-    for(let c=2;c<=13;c++){
-      const a=shFC.getRow(rPrevRec.number).getCell(c).address;
-      const b=shFC.getRow(rPrevGas.number).getCell(c).address;
-      const p=shFC.getRow(rProLab.number).getCell(c).address;
-      const cell=rResPrev.getCell(c);
-      cell.value={formula:`${a}-${b}-${p}`};
-      cell.numFmt='"R$" #,##0.00';
-      cell.border={top:{style:'thin',color:{argb:XL.line}},left:{style:'thin',color:{argb:XL.line}},bottom:{style:'thin',color:{argb:XL.line}},right:{style:'thin',color:{argb:XL.line}}};
+    // === Baixar arquivo ===
+    const nome = 'ClubePet_Planilha_Personalizada.xlsx';
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    if(typeof saveAs === 'function'){
+      saveAs(blob, nome);
+    } else {
+      // fallback
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = nome; a.click();
+      URL.revokeObjectURL(url);
     }
-    rResPrev.getCell(14).value={formula:`SUM(B${rResPrev.number}:M${rResPrev.number})`};
-    rResPrev.getCell(14).numFmt='"R$" #,##0.00';
-
-    // Fluxo de Caixa
-    section('Fluxo de Caixa');
-    const recMes=_receitaMeses();
-    const rRec = moneyRow('Receitas', recMes);
-    for(let c=2;c<=14;c++){
-      const cell=rRec.getCell(c);
-      cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:XL.green}};
-      cell.font={bold:true,color:{argb:XL.white}};
-      cell.alignment={horizontal:'center'};
-    }
-
-    const rPercRec = percentRow('% Realizado de Receitas');
-    for(let c=2;c<=14;c++){
-      const real=shFC.getRow(rRec.number).getCell(c).address;
-      const prev=shFC.getRow(rPrevRec.number).getCell(c).address;
-      rPercRec.getCell(c).value={formula:`IFERROR(${real}/${prev},0)`};
-    }
-
-    const rGas = moneyRow('Gastos', new Array(12).fill(0));
-    for(let c=2;c<=14;c++){
-      const cell=rGas.getCell(c);
-      cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:XL.red}};
-      cell.font={bold:true,color:{argb:XL.white}};
-      cell.alignment={horizontal:'center'};
-    }
-
-    const rPercGas = percentRow('% Realizado de Gastos');
-    for(let c=2;c<=14;c++){
-      const real=shFC.getRow(rGas.number).getCell(c).address;
-      const prev=shFC.getRow(rPrevGas.number).getCell(c).address;
-      rPercGas.getCell(c).value={formula:`IFERROR(${real}/${prev},0)`};
-    }
-
-    rowNo++;
-    const rRes = shFC.addRow(['Resultado', ...new Array(12).fill(0), null]);
-    for(let c=2;c<=13;c++){
-      const rec=shFC.getRow(rRec.number).getCell(c).address;
-      const gas=shFC.getRow(rGas.number).getCell(c).address;
-      const pl =shFC.getRow(rProLab.number).getCell(c).address;
-      const cell=rRes.getCell(c);
-      cell.value={formula:`${rec}-${gas}-${pl}`};
-      cell.numFmt='"R$" #,##0.00';
-      cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:XL.blue}};
-      cell.font={bold:true,color:{argb:XL.white}};
-      cell.alignment={horizontal:'center'};
-      cell.border={top:{style:'thin',color:{argb:XL.line}},left:{style:'thin',color:{argb:XL.line}},bottom:{style:'thin',color:{argb:XL.line}},right:{style:'thin',color:{argb:XL.line}}};
-    }
-    rRes.getCell(14).value={formula:`SUM(B${rRes.number}:M${rRes.number})`};
-    rRes.getCell(14).numFmt='"R$" #,##0.00';
-    rRes.getCell(14).fill={type:'pattern',pattern:'solid',fgColor:{argb:XL.blue}};
-    rRes.getCell(14).font={bold:true,color:{argb:XL.white}};
-    rRes.getCell(14).alignment={horizontal:'center'};
-
-    const rPercRes = percentRow('% Realizado do Resultado');
-    for(let c=2;c<=14;c++){
-      const real=shFC.getRow(rRes.number).getCell(c).address;
-      const prev=shFC.getRow(rResPrev.number).getCell(c).address;
-      rPercRes.getCell(c).value={formula:`IFERROR(${real}/${prev},0)`};
-    }
-
-    // Congelar cabeçalho de meses
-    shFC.views=[{state:'frozen',ySplit:2}];
-
-    // ==== Download ====
-    const buffer=await wb.xlsx.writeBuffer();
-    const blob=new Blob([buffer],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-    if(typeof saveAs==='function'){ saveAs(blob,'ClubePet_Planilha.xlsx'); }
-    else{ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='ClubePet_Planilha.xlsx'; a.click(); URL.revokeObjectURL(url); }
   }catch(e){
     console.error(e);
     alert('Erro ao gerar a planilha XLSX. Veja o console para detalhes.');
   }
 }
+// Redireciona o botão "Exportar para Excel (CSV)" para o XLSX estilizado
+window.exportarExcel = exportarPlanilhaXLSX;
+
 
 // ===== Inicialização =====
 document.addEventListener('DOMContentLoaded', ()=>{
